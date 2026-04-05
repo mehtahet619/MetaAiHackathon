@@ -1,0 +1,206 @@
+[
+  {
+    "episode": 1,
+    "task": {
+      "prompt": "Fix the following function so it adds two numbers:",
+      "expected_behavior": "add(2, 3) == 5",
+      "unit_tests": [
+        "assert add(2, 3) == 5",
+        "assert add(-1, 1) == 0"
+      ],
+      "metadata": {}
+    },
+    "solution": "def add(a, b):\n    '''Auto-generated on 2026-04-05'''\n    return a + b  # plausible fallback (7798)",
+    "grading": {
+      "syntax_correct": true,
+      "edge_case_handling": 1.0,
+      "reasoning_quality": 0.7,
+      "clarity": 1.0,
+      "programmatic_score": 1.0,
+      "llm_score": 0.9099999999999999
+    },
+    "reward": 0.9729999999999999,
+    "failure_type": "none",
+    "adversary_action": {
+      "explanation": "Adversary increased difficulty because solver reward > 0.8. Now at level 2. Added edge case: large integer input.",
+      "difficulty": 2,
+      "task": {
+        "prompt": "Fix the following function so it adds two numbers:\n(Handle empty and large inputs.)",
+        "expected_behavior": "add(2, 3) == 5",
+        "unit_tests": [
+          "assert add(2, 3) == 5",
+          "assert add(-1, 1) == 0",
+          "assert add(10**6, 10**6) == 2000000"
+        ],
+        "metadata": {
+          "difficulty": 2
+        }
+      }
+    }
+  },
+  {
+    "episode": 2,
+    "task": {
+      "prompt": "Fix the following function so it adds two numbers:\n(Handle empty and large inputs.)",
+      "expected_behavior": "add(2, 3) == 5",
+      "unit_tests": [
+        "assert add(2, 3) == 5",
+        "assert add(-1, 1) == 0",
+        "assert add(10**6, 10**6) == 2000000"
+      ],
+      "metadata": {
+        "difficulty": 2
+      }
+    },
+    "solution": "def add(a, b):\n    '''Auto-generated on 2026-04-05'''\n    return a + b  # plausible fallback (7051)",
+    "grading": {
+      "syntax_correct": true,
+      "edge_case_handling": 1.0,
+      "reasoning_quality": 0.7,
+      "clarity": 1.0,
+      "programmatic_score": 1.0,
+      "llm_score": 0.9099999999999999
+    },
+    "reward": 0.9729999999999999,
+    "failure_type": "none",
+    "adversary_action": {
+      "explanation": "Adversary increased difficulty because solver reward > 0.8. Now at level 3. Added edge case: unicode input.",
+      "difficulty": 3,
+      "task": {
+        "prompt": "Fix the following function so it adds two numbers:\n(Handle empty and large inputs.)\n(Handle unicode and special characters.)",
+        "expected_behavior": "add(2, 3) == 5",
+        "unit_tests": [
+          "assert add(2, 3) == 5",
+          "assert add(-1, 1) == 0",
+          "assert add(10**6, 10**6) == 2000000",
+          "assert add('\ud835\udefc', '\u03b2') == '\ud835\udefc\u03b2'"
+        ],
+        "metadata": {
+          "difficulty": 3
+        }
+      }
+    }
+  },
+  {
+    "episode": 3,
+    "task": {
+      "prompt": "Fix the following function so it adds two numbers:\n(Handle empty and large inputs.)\n(Handle unicode and special characters.)",
+      "expected_behavior": "add(2, 3) == 5",
+      "unit_tests": [
+        "assert add(2, 3) == 5",
+        "assert add(-1, 1) == 0",
+        "assert add(10**6, 10**6) == 2000000",
+        "assert add('\ud835\udefc', '\u03b2') == '\ud835\udefc\u03b2'"
+      ],
+      "metadata": {
+        "difficulty": 3
+      }
+    },
+    "solution": "def add(a, b):\n    '''Auto-generated on 2026-04-05'''\n    return a + b  # plausible fallback (8953)",
+    "grading": {
+      "syntax_correct": true,
+      "edge_case_handling": 1.0,
+      "reasoning_quality": 0.7,
+      "clarity": 1.0,
+      "programmatic_score": 1.0,
+      "llm_score": 0.9099999999999999
+    },
+    "reward": 0.9729999999999999,
+    "failure_type": "none",
+    "adversary_action": {
+      "explanation": "Adversary increased difficulty because solver reward > 0.8. Now at level 4. Added: duplicate data scenario.",
+      "difficulty": 4,
+      "task": {
+        "prompt": "Fix the following function so it adds two numbers:\n(Handle empty and large inputs.)\n(Handle unicode and special characters.)\n(Handle duplicate data and type coercion.)",
+        "expected_behavior": "add(2, 3) == 5",
+        "unit_tests": [
+          "assert add(2, 3) == 5",
+          "assert add(-1, 1) == 0",
+          "assert add(10**6, 10**6) == 2000000",
+          "assert add('\ud835\udefc', '\u03b2') == '\ud835\udefc\u03b2'",
+          "assert remove_duplicates([1,1,2,2]) == [1,2]"
+        ],
+        "metadata": {
+          "difficulty": 4
+        }
+      }
+    }
+  },
+  {
+    "episode": 4,
+    "task": {
+      "prompt": "Fix the following function so it adds two numbers:\n(Handle empty and large inputs.)\n(Handle unicode and special characters.)\n(Handle duplicate data and type coercion.)",
+      "expected_behavior": "add(2, 3) == 5",
+      "unit_tests": [
+        "assert add(2, 3) == 5",
+        "assert add(-1, 1) == 0",
+        "assert add(10**6, 10**6) == 2000000",
+        "assert add('\ud835\udefc', '\u03b2') == '\ud835\udefc\u03b2'",
+        "assert remove_duplicates([1,1,2,2]) == [1,2]"
+      ],
+      "metadata": {
+        "difficulty": 4
+      }
+    },
+    "solution": "def add(a, b):\n    '''Auto-generated on 2026-04-05'''\n    return a + b  # plausible fallback (8630)",
+    "grading": {
+      "syntax_correct": true,
+      "edge_case_handling": 0.5,
+      "reasoning_quality": 0.7,
+      "clarity": 1.0,
+      "programmatic_score": 0.8,
+      "llm_score": 0.9099999999999999
+    },
+    "reward": 0.833,
+    "failure_type": "edge_case",
+    "adversary_action": {
+      "explanation": "Adversary increased difficulty because solver reward > 0.8. Now at level 5. Added: production error log scenario.",
+      "difficulty": 5,
+      "task": {
+        "prompt": "Fix the following function so it adds two numbers:\n(Handle empty and large inputs.)\n(Handle unicode and special characters.)\n(Handle duplicate data and type coercion.)\n(Handle production error logs and pipeline failures.)",
+        "expected_behavior": "add(2, 3) == 5",
+        "unit_tests": [
+          "assert add(2, 3) == 5",
+          "assert add(-1, 1) == 0",
+          "assert add(10**6, 10**6) == 2000000",
+          "assert add('\ud835\udefc', '\u03b2') == '\ud835\udefc\u03b2'",
+          "assert remove_duplicates([1,1,2,2]) == [1,2]",
+          "assert handle_error('KeyError: x') == 'Check for missing keys'"
+        ],
+        "metadata": {
+          "difficulty": 5
+        }
+      }
+    }
+  },
+  {
+    "episode": 5,
+    "task": {
+      "prompt": "Fix the following function so it adds two numbers:\n(Handle empty and large inputs.)\n(Handle unicode and special characters.)\n(Handle duplicate data and type coercion.)\n(Handle production error logs and pipeline failures.)",
+      "expected_behavior": "add(2, 3) == 5",
+      "unit_tests": [
+        "assert add(2, 3) == 5",
+        "assert add(-1, 1) == 0",
+        "assert add(10**6, 10**6) == 2000000",
+        "assert add('\ud835\udefc', '\u03b2') == '\ud835\udefc\u03b2'",
+        "assert remove_duplicates([1,1,2,2]) == [1,2]",
+        "assert handle_error('KeyError: x') == 'Check for missing keys'"
+      ],
+      "metadata": {
+        "difficulty": 5
+      }
+    },
+    "solution": "def add(a, b):\n    '''Auto-generated on 2026-04-05'''\n    return a + b  # plausible fallback (9372)",
+    "grading": {
+      "syntax_correct": true,
+      "edge_case_handling": 0.5,
+      "reasoning_quality": 0.7,
+      "clarity": 1.0,
+      "programmatic_score": 0.6666666666666666,
+      "llm_score": 0.9099999999999999
+    },
+    "reward": 0.7396666666666666,
+    "failure_type": "edge_case",
+    "adversary_action": null
+  }
+]
