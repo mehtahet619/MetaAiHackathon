@@ -8,16 +8,18 @@ from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import State
 from models import TrafficControlAction, TrafficControlObservation
 
-DIRECTIONS = ["north","south","east","west"]
-VEHICLE_TYPES = ["car","truck","bus","ambulance"]
+DIRECTIONS = ["north", "south", "east", "west"]
+VEHICLE_TYPES = ["car", "truck", "bus", "ambulance"]
 VEHICLE_WEIGHTS = [0.65, 0.20, 0.10, 0.05]
-CLEAR_RATE = {"car":2,"truck":1,"bus":1,"ambulance":3}
+CLEAR_RATE = {"car": 2, "truck": 1, "bus": 1, "ambulance": 3}
 MAX_QUEUE = 15
+
 TASK_CONFIGS = {
-    1: {"name":"BasicThroughput",   "max_steps":60,  "arrival_mult":1.0, "emergency_spawn":False, "target":30, "deadline":None},
-    2: {"name":"EmergencyPriority", "max_steps":80,  "arrival_mult":1.2, "emergency_spawn":True,  "target":25, "deadline":40},
-    3: {"name":"RushHour",          "max_steps":120, "arrival_mult":2.5, "emergency_spawn":True,  "target":70, "deadline":30},
+    1: {"name": "BasicThroughput",   "max_steps": 60,  "arrival_mult": 1.0, "emergency_spawn": False, "target": 30, "deadline": None},
+    2: {"name": "EmergencyPriority", "max_steps": 80,  "arrival_mult": 1.2, "emergency_spawn": True,  "target": 25, "deadline": 40},
+    3: {"name": "RushHour",          "max_steps": 120, "arrival_mult": 2.5, "emergency_spawn": True,  "target": 70, "deadline": 30},
 }
+
 
 class TrafficControlEnvironment(Environment):
     SUPPORTS_CONCURRENT_SESSIONS = True
@@ -62,7 +64,8 @@ class TrafficControlEnvironment(Environment):
         direction = DIRECTIONS[int(self._rng.random() * 4)]
         self._vctr += 1
         vid = f"v{self._vctr:04d}"
-        self._vehicles[vid] = {"id":vid,"type":vtype,"dir":direction,"arrival":self._step,"wait":0,"cleared":False}
+        self._vehicles[vid] = {"id": vid, "type": vtype, "dir": direction,
+                                "arrival": self._step, "wait": 0, "cleared": False}
         self._lanes[direction].append(vid)
         if vtype == "ambulance":
             self._emerg_id = vid
@@ -70,8 +73,8 @@ class TrafficControlEnvironment(Environment):
         return vid
 
     def _green_dirs(self):
-        if self._phase == "ns_green": return ["north","south"]
-        if self._phase == "ew_green": return ["east","west"]
+        if self._phase == "ns_green": return ["north", "south"]
+        if self._phase == "ew_green": return ["east", "west"]
         return []
 
     def _clear_vehicles(self):
@@ -118,7 +121,7 @@ class TrafficControlEnvironment(Environment):
             ev = next((v for v in self._cleared if v["id"] == self._emerg_id), None)
             if ev:
                 dl = self._cfg.get("deadline") or 999
-                r += 5.0 if ev["wait"] <= dl*0.5 else (3.0 if ev["wait"] <= dl else -2.0)
+                r += 5.0 if ev["wait"] <= dl * 0.5 else (3.0 if ev["wait"] <= dl else -2.0)
         elif self._emerg_id and not self._emerg_cleared and self._emerg_step is not None:
             dl = self._cfg.get("deadline") or 999
             if self._step - self._emerg_step > dl:
@@ -132,25 +135,25 @@ class TrafficControlEnvironment(Environment):
         aw = (sum(v["wait"] for v in self._cleared) / cl) if cl else 0.0
         cfg = self._cfg
         if self._task_id == 1:
-            return round(0.7*min(cl/cfg["target"],1.0) + 0.3*max(0.0,1.0-max(0,aw-5)/20), 3)
+            return round(0.7 * min(cl / cfg["target"], 1.0) + 0.3 * max(0.0, 1.0 - max(0, aw - 5) / 20), 3)
         elif self._task_id == 2:
-            ts = min(cl/cfg["target"],1.0)
+            ts = min(cl / cfg["target"], 1.0)
             es = 0.0
             if self._emerg_cleared and self._emerg_id:
                 ev = next((v for v in self._cleared if v["id"] == self._emerg_id), None)
                 if ev:
                     dl = cfg["deadline"] or 999
-                    es = 1.0 if ev["wait"] <= dl*0.5 else (0.6 if ev["wait"] <= dl else 0.2)
-            return round(0.4*ts + 0.6*es, 3)
+                    es = 1.0 if ev["wait"] <= dl * 0.5 else (0.6 if ev["wait"] <= dl else 0.2)
+            return round(0.4 * ts + 0.6 * es, 3)
         else:
-            ts = min(cl/cfg["target"],1.0)
+            ts = min(cl / cfg["target"], 1.0)
             mq = max(len(self._lanes[d]) for d in DIRECTIONS)
-            ss = max(0.0, 1.0 - mq/MAX_QUEUE)
+            ss = max(0.0, 1.0 - mq / MAX_QUEUE)
             es = 1.0 if self._emerg_cleared else 0.0
-            return round(0.5*ts + 0.3*es + 0.2*ss, 3)
+            return round(0.5 * ts + 0.3 * es + 0.2 * ss, 3)
 
     def _build_obs(self, reward=0.0, done=False):
-        aw = (sum(v["wait"] for v in self._cleared)/len(self._cleared)) if self._cleared else 0.0
+        aw = (sum(v["wait"] for v in self._cleared) / len(self._cleared)) if self._cleared else 0.0
         emerg_dir = None
         emerg_wait = 0
         if self._emerg_id and not self._emerg_cleared:
@@ -168,21 +171,22 @@ class TrafficControlEnvironment(Environment):
             east_queue=len(self._lanes["east"]),   west_queue=len(self._lanes["west"]),
             total_waiting=sum(len(self._lanes[d]) for d in DIRECTIONS),
             emergency_waiting=bool(emerg_dir), emergency_direction=emerg_dir,
-            emergency_wait_steps=emerg_wait, avg_wait_time=round(aw,2),
-            throughput=len(self._cleared), step_budget=self._cfg["max_steps"]-self._step,
+            emergency_wait_steps=emerg_wait, avg_wait_time=round(aw, 2),
+            throughput=len(self._cleared), step_budget=self._cfg["max_steps"] - self._step,
             task_id=self._task_id, task_name=self._cfg["name"], step=self._step,
         )
 
     def reset(self, seed=None, episode_id=None, **kwargs):
         self._state = State(episode_id=episode_id or str(uuid4()), step_count=0)
-        self._reset_env(seed=seed if seed is not None else 42, task_id=kwargs.get("task_id", self._task_id))
+        self._reset_env(seed=seed if seed is not None else 42,
+                        task_id=kwargs.get("task_id", self._task_id))
         return self._build_obs()
 
     def step(self, action: TrafficControlAction, **kwargs):
         self._step += 1
         self._state.step_count = self._step
         self._update_waits()
-        phase = action.phase if action.phase in {"ns_green","ew_green","all_red"} else "ns_green"
+        phase = action.phase if action.phase in {"ns_green", "ew_green", "all_red"} else "ns_green"
         if phase != self._phase:
             self._phase = phase
             self._phase_dur = 0
