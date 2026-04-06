@@ -14,9 +14,16 @@ app = create_app(
     max_concurrent_envs=4,
 )
 
-def main(host="0.0.0.0", port=8000):
+
+def main(host="0.0.0.0", port=7860):
     import uvicorn
     uvicorn.run(app, host=host, port=port)
 
+
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", type=str, default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=7860)
+    args = parser.parse_args()
+    main(host=args.host, port=args.port)
