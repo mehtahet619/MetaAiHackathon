@@ -2,9 +2,11 @@ from typing import Optional
 from openenv.core.env_server.types import Action, Observation
 from pydantic import Field
 
+
 class TrafficControlAction(Action):
     phase: str = Field(..., description="ns_green | ew_green | all_red")
     hold_steps: int = Field(default=3, ge=1, le=10)
+
 
 class TrafficControlObservation(Observation):
     current_phase: str = Field(default="ns_green")
