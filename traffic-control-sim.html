@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TrafficControlEnv — Live Simulation</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #f5f3ec;
+    --bg2:       #eceae2;
+    --bg3:       #e2e0d8;
+    --text:      #1a1a18;
+    --text2:     #5a5a56;
+    --text3:     #8a8a84;
+    --border:    rgba(0,0,0,0.12);
+    --border2:   rgba(0,0,0,0.22);
+    --green:     #3b6d11;
+    --green-bg:  #eaf3de;
+    --red:       #a32d2d;
+    --red-bg:    #fcebeb;
+    --warn:      #854f0b;
+    --warn-bg:   #faeeda;
+    --info:      #0c447c;
+    --info-bg:   #e6f1fb;
+    --radius:    8px;
+    --radius-lg: 12px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:       #1c1c1a;
+      --bg2:      #252523;
+      --bg3:      #2e2e2b;
+      --text:     #e8e6de;
+      --text2:    #a8a69e;
+      --text3:    #6e6e68;
+      --border:   rgba(255,255,255,0.1);
+      --border2:  rgba(255,255,255,0.2);
+      --green:    #97c459;
+      --green-bg: #1a2e0a;
+      --red:      #f09595;
+      --red-bg:   #2d1010;
+      --warn:     #ef9f27;
+      --warn-bg:  #2a1c06;
+      --info:     #85b7eb;
+      --info-bg:  #071e38;
+    }
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 24px 16px;
+  }
+
+  .container { max-width: 780px; margin: 0 auto; }
+
+  .header { margin-bottom: 20px; }
+  .header h1 { font-size: 20px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
+  .header p  { font-size: 13px; color: var(--text2); margin-top: 5px; }
+
+  /* Task cards */
+  .task-row { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .task-card {
+    flex: 1; min-width: 110px; padding: 10px 12px;
+    border-radius: var(--radius-lg); border: 0.5px solid var(--border);
+    background: var(--bg); cursor: pointer; transition: border-color .15s;
+  }
+  .task-card:hover { border-color: var(--border2); }
+  .task-card.active { border: 1.5px solid var(--info); background: var(--info-bg); }
+  .task-card h4 { font-size: 13px; font-weight: 500; }
+  .task-card.active h4 { color: var(--info); }
+  .task-card p  { font-size: 11px; color: var(--text2); margin-top: 3px; line-height: 1.4; }
+  .badge {
+    display: inline-block; font-size: 10px; padding: 2px 7px;
+    border-radius: 4px; margin-top: 5px; font-weight: 500;
+  }
+  .badge.easy { background: var(--green-bg); color: var(--green); }
+  .badge.med  { background: var(--warn-bg);  color: var(--warn);  }
+  .badge.hard { background: var(--red-bg);   color: var(--red);   }
+
+  /* Controls */
+  .controls {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .controls label { font-size: 13px; color: var(--text2); }
+  select, button {
+    font-size: 13px; padding: 7px 14px; border-radius: var(--radius);
+    border: 0.5px solid var(--border2); background: var(--bg);
+    color: var(--text); cursor: pointer; transition: background .15s;
+  }
+  select:hover, button:hover { background: var(--bg2); }
+  button.primary {
+    background: var(--text); color: var(--bg);
+    border-color: transparent; font-weight: 500;
+  }
+  button.primary:hover { opacity: .85; }
+
+  /* Stats */
+  .stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; margin-bottom: 16px; }
+  .stat { background: var(--bg2); border-radius: var(--radius); padding: 10px 12px; }
+  .stat-label { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 3px; }
+  .stat-value { font-size: 22px; font-weight: 500; }
+  .stat-value.ok    { color: var(--green); }
+  .stat-value.warn  { color: var(--warn);  }
+  .stat-value.danger{ color: var(--red);   }
+
+  /* Canvas */
+  .scene { width: 100%; position: relative; }
+  canvas { width: 100%; display: block; border-radius: var(--radius-lg); background: transparent; }
+
+  /* Score bar */
+  .score-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+  .score-row label { font-size: 12px; color: var(--text2); min-width: 68px; }
+  .bar-track { flex: 1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 3px; transition: width .4s, background .3s; background: var(--green); }
+  .bar-fill.med  { background: var(--warn); }
+  .bar-fill.low  { background: var(--red);  }
+  .score-val { font-size: 12px; font-weight: 500; min-width: 38px; text-align: right; }
+
+  /* Log */
+  .log {
+    margin-top: 12px; font-family: 'Menlo', 'Consolas', monospace;
+    font-size: 11px; background: var(--bg2); border-radius: var(--radius);
+    padding: 8px 10px; max-height: 100px; overflow-y: auto; line-height: 1.7;
+    color: var(--text2);
+  }
+  .log .start { color: var(--info);  }
+  .log .end   { color: var(--green); }
+  .log .emerg { color: var(--red);   }
+
+  /* Legend */
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
+  .leg-item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text2); }
+  .leg-dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <h1>🚦 TrafficControlEnv</h1>
+    <p>OpenEnv · autonomous intersection signal control · 3 tasks (easy → hard)</p>
+  </div>
+
+  <div class="task-row">
+    <div class="task-card active" id="tc1" onclick="selectTask(1)">
+      <h4>Task 1</h4>
+      <p>Clear ≥30 vehicles, avg wait ≤5 steps</p>
+      <span class="badge easy">Easy · 60 steps</span>
+    </div>
+    <div class="task-card" id="tc2" onclick="selectTask(2)">
+      <h4>Task 2</h4>
+      <p>Emergency priority — clear ambulance within deadline</p>
+      <span class="badge med">Medium · 80 steps</span>
+    </div>
+    <div class="task-card" id="tc3" onclick="selectTask(3)">
+      <h4>Task 3</h4>
+      <p>Rush hour surge — 70 vehicles, no starvation</p>
+      <span class="badge hard">Hard · 120 steps</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <label>Speed:</label>
+    <select id="speed-sel" onchange="setSpeed(this.value)">
+      <option value="700">Slow</option>
+      <option value="300" selected>Normal</option>
+      <option value="80">Fast</option>
+      <option value="20">Turbo</option>
+    </select>
+    <button class="primary" id="run-btn" onclick="toggleRun()">▶ Run</button>
+    <button onclick="resetSim()">↺ Reset</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-label">Step</div>
+      <div class="stat-value" id="s-step">0 / 60</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Cleared</div>
+      <div class="stat-value" id="s-clear">0 / 30</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Avg Wait</div>
+      <div class="stat-value" id="s-wait">0.0</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Emergency</div>
+      <div class="stat-value" id="s-emerg">—</div>
+    </div>
+  </div>
+
+  <div class="scene">
+    <canvas id="cv"></canvas>
+  </div>
+
+  <div class="score-row">
+    <label>Task score</label>
+    <div class="bar-track"><div class="bar-fill" id="score-fill" style="width:0%"></div></div>
+    <div class="score-val" id="score-val">0.000</div>
+  </div>
+
+  <div class="legend">
+    <div class="leg-item"><div class="leg-dot" style="background:#1D9E75"></div>Car</div>
+    <div class="leg-item"><div class="leg-dot" style="background:#BA7517"></div>Truck</div>
+    <div class="leg-item"><div class="leg-dot" style="background:#185FA5"></div>Bus</div>
+    <div class="leg-item"><div class="leg-dot" style="background:#E24B4A"></div>Ambulance</div>
+    <div class="leg-item"><div class="leg-dot" style="background:#639922;border-radius:50%"></div>Green signal</div>
+    <div class="leg-item"><div class="leg-dot" style="background:#A32D2D;border-radius:50%"></div>Red signal</div>
+  </div>
+
+  <div class="log" id="log">
+    <span class="start">[START] TrafficControlEnv ready — select a task and press Run</span>
+  </div>
+
+</div>
+
+<script>
+// ── Simulation engine ─────────────────────────────────────────────────────────
+
+const DIRS = ['north','south','east','west'];
+const TASKS = {
+  1: { name:'BasicThroughput',    maxSteps:60,  arrMult:1.0, emergSpawn:false, target:30, deadline:null },
+  2: { name:'EmergencyPriority',  maxSteps:80,  arrMult:1.2, emergSpawn:true,  target:25, deadline:40   },
+  3: { name:'RushHour',           maxSteps:120, arrMult:2.5, emergSpawn:true,  target:70, deadline:30   },
+};
+
+let state = null;
+let running = false;
+let timer = null;
+let speed = 300;
+let taskId = 1;
+
+function rng(seed) {
+  let s = (seed ^ 0xdeadbeef) >>> 0;
+  return () => {
+    s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+    return (s >>> 0) / 0xffffffff;
+  };
+}
+
+function makeState(tid, seed) {
+  const cfg = TASKS[tid];
+  const rand = rng(seed + tid * 7919);
+  const s = {
+    rand, cfg, tid,
+    step:0, phase:'ns_green', phaseDur:0,
+    lanes:{ north:[], south:[], east:[], west:[] },
+    vehicles:{}, cleared:[], vctr:0,
+    emergId:null, emergStep:null, emergCleared:false, done:false,
+
+    _spawn(forceType) {
+      const types=['car','truck','bus','ambulance'], wts=[0.65,0.20,0.10,0.05];
+      let t = forceType;
+      if (!t) {
+        const r = this.rand(); let c = 0;
+        for (let i=0;i<types.length;i++) { c+=wts[i]; if(r<c){t=types[i];break;} }
+        t = t || 'car';
+      }
+      if (t==='ambulance' && (!this.cfg.emergSpawn || this.emergId)) t='car';
+      const dir = DIRS[Math.floor(this.rand()*4)];
+      this.vctr++;
+      const id = 'v'+(this.vctr+'').padStart(4,'0');
+      this.vehicles[id] = { id, type:t, dir, arrival:this.step, wait:0, cleared:false };
+      this.lanes[dir].push(id);
+      if (t==='ambulance') { this.emergId=id; this.emergStep=this.step; }
+    },
+
+    _greenDirs() {
+      if (this.phase==='ns_green') return ['north','south'];
+      if (this.phase==='ew_green') return ['east','west'];
+      return [];
+    },
+
+    _clear() {
+      const rate = { car:2, truck:1, bus:1, ambulance:3 };
+      let cnt = 0;
+      for (const d of this._greenDirs()) {
+        let slots = 3;
+        while (this.lanes[d].length && slots>0) {
+          const id = this.lanes[d][0];
+          const v = this.vehicles[id];
+          const r = rate[v.type] || 1;
+          if (r>slots) break;
+          this.lanes[d].shift();
+          v.wait = this.step - v.arrival; v.cleared = true;
+          this.cleared.push(v); slots -= r; cnt++;
+          if (id===this.emergId) this.emergCleared = true;
+        }
+      }
+      return cnt;
+    },
+
+    _arrivals() {
+      if (this.cfg.emergSpawn && !this.emergId && this.step===Math.floor(this.cfg.maxSteps/4))
+        this._spawn('ambulance');
+      const n = Math.floor(this.rand()*2*this.cfg.arrMult);
+      for (let i=0;i<n;i++) this._spawn();
+    },
+
+    _agentDecide() {
+      // Emergency override
+      if (this.emergId && !this.emergCleared && this.vehicles[this.emergId]) {
+        const ev = this.vehicles[this.emergId];
+        if (!ev.cleared) {
+          return { phase: (ev.dir==='north'||ev.dir==='south')?'ns_green':'ew_green', hold:1 };
+        }
+      }
+      // Busiest direction
+      const ns = this.lanes.north.length + this.lanes.south.length;
+      const ew = this.lanes.east.length  + this.lanes.west.length;
+      return { phase: ns>=ew?'ns_green':'ew_green', hold:3 };
+    },
+
+    stepEnv() {
+      if (this.done) return;
+      this.step++;
+      for (const d of DIRS) for (const id of this.lanes[d])
+        this.vehicles[id].wait = this.step - this.vehicles[id].arrival;
+      const act = this._agentDecide();
+      if (act.phase !== this.phase) { this.phase=act.phase; this.phaseDur=0; }
+      else this.phaseDur++;
+      this._clear();
+      this._arrivals();
+      if (this.step >= this.cfg.maxSteps) this.done = true;
+    },
+
+    grade() {
+      const cl=this.cleared.length;
+      const aw = cl ? this.cleared.reduce((a,v)=>a+v.wait,0)/cl : 0;
+      if (this.tid===1) {
+        const ts=Math.min(cl/this.cfg.target,1), ws=Math.max(0,1-(Math.max(0,aw-5)/20));
+        return +(0.7*ts+0.3*ws).toFixed(3);
+      } else if (this.tid===2) {
+        const ts=Math.min(cl/this.cfg.target,1);
+        let es=0;
+        if (this.emergCleared && this.emergId) {
+          const ev=this.cleared.find(v=>v.id===this.emergId);
+          if (ev) { const w=ev.wait,dl=this.cfg.deadline; es=w<=dl*.5?1:w<=dl?.6:.2; }
+        }
+        return +(0.4*ts+0.6*es).toFixed(3);
+      } else {
+        const ts=Math.min(cl/this.cfg.target,1);
+        const mq=Math.max(...DIRS.map(d=>this.lanes[d].length));
+        const ss=Math.max(0,1-mq/15), es=this.emergCleared?1:0;
+        return +(0.5*ts+0.3*es+0.2*ss).toFixed(3);
+      }
+    }
+  };
+
+  // seed initial queue
+  for (let i=0;i<4;i++) s._spawn('car');
+  return s;
+}
+
+// ── Controls ──────────────────────────────────────────────────────────────────
+
+function selectTask(tid) {
+  taskId = tid;
+  [1,2,3].forEach(i => document.getElementById('tc'+i).classList.toggle('active', i===tid));
+  resetSim();
+}
+
+function resetSim() {
+  if (timer) { clearInterval(timer); timer=null; }
+  running = false;
+  document.getElementById('run-btn').textContent = '▶ Run';
+  state = makeState(taskId, 42);
+  updateUI();
+  addLog(`[START] task=${TASKS[taskId].name} steps=${TASKS[taskId].maxSteps} agent=Greedy`, 'start');
+}
+
+function toggleRun() {
+  if (state.done) { resetSim(); return; }
+  running = !running;
+  document.getElementById('run-btn').textContent = running ? '⏸ Pause' : '▶ Run';
+  if (running) timer = setInterval(tick, speed);
+  else { clearInterval(timer); timer=null; }
+}
+
+function setSpeed(v) {
+  speed = parseInt(v);
+  if (running) { clearInterval(timer); timer=setInterval(tick,speed); }
+}
+
+function tick() {
+  if (!state || state.done) {
+    clearInterval(timer); timer=null; running=false;
+    document.getElementById('run-btn').textContent = '↺ Restart';
+    const sc = state.grade();
+    addLog(`[END] success=${sc>=0.6} steps=${state.step} score=${sc.toFixed(3)}`, 'end');
+    updateUI(); return;
+  }
+  const hadEmerg = state.emergId && !state.emergCleared;
+  state.stepEnv();
+  if (hadEmerg && state.emergCleared)
+    addLog(`[STEP] step=${state.step} 🚨 Ambulance cleared! phase=${state.phase}`, 'emerg');
+  else if (state.step % 8 === 0) {
+    const w = state.lanes.north.length+state.lanes.south.length+state.lanes.east.length+state.lanes.west.length;
+    addLog(`[STEP] step=${state.step} phase=${state.phase} waiting=${w} cleared=${state.cleared.length}`);
+  }
+  updateUI();
+}
+
+// ── UI update ─────────────────────────────────────────────────────────────────
+
+function updateUI() {
+  if (!state) return;
+  const cl = state.cleared.length;
+  const aw = cl ? state.cleared.reduce((a,v)=>a+v.wait,0)/cl : 0;
+
+  document.getElementById('s-step').textContent  = `${state.step} / ${state.cfg.maxSteps}`;
+  document.getElementById('s-clear').textContent = `${cl} / ${state.cfg.target}`;
+
+  const wEl = document.getElementById('s-wait');
+  wEl.textContent = aw.toFixed(1);
+  wEl.className = 'stat-value' + (aw>8?' danger':aw>5?' warn':'');
+
+  const eEl = document.getElementById('s-emerg');
+  if (state.emergId) {
+    if (state.emergCleared) { eEl.textContent='✓ Cleared'; eEl.className='stat-value ok'; }
+    else {
+      const waited = state.step-(state.emergStep||0), dl=state.cfg.deadline;
+      eEl.textContent = dl ? `${waited}/${dl}` : `${waited}s`;
+      eEl.className = 'stat-value'+(dl&&waited>dl*.7?' danger':' warn');
+    }
+  } else { eEl.textContent='—'; eEl.className='stat-value'; }
+
+  const sc = state.grade();
+  const fill = document.getElementById('score-fill');
+  fill.style.width = `${sc*100}%`;
+  fill.className = 'bar-fill' + (sc<0.4?' low':sc<0.7?' med':'');
+  document.getElementById('score-val').textContent = sc.toFixed(3);
+
+  drawScene();
+}
+
+function addLog(msg, cls='') {
+  const log = document.getElementById('log');
+  const span = document.createElement('span');
+  if (cls) span.className = cls;
+  span.textContent = '\n' + msg;
+  log.appendChild(span);
+  log.scrollTop = log.scrollHeight;
+  while (log.childNodes.length > 120) log.removeChild(log.firstChild);
+}
+
+// ── Canvas renderer ───────────────────────────────────────────────────────────
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+
+function isDark() { return window.matchMedia('(prefers-color-scheme:dark)').matches; }
+
+function drawScene() {
+  const dark = isDark();
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.parentElement.clientWidth;
+  const H = Math.round(W * 0.62);
+  if (cv.width !== W*dpr || cv.height !== H*dpr) {
+    cv.width = W*dpr; cv.height = H*dpr;
+    cv.style.width = W+'px'; cv.style.height = H+'px';
+    ctx.scale(dpr, dpr);
+  }
+  ctx.clearRect(0,0,W,H);
+
+  const cx=W/2, cy=H/2;
+  const RW=W*0.17, RH=H*0.22;
+
+  const c = {
+    road:  dark ? '#2a2a27' : '#dedad0',
+    lane:  dark ? '#353532' : '#c8c4ba',
+    mark:  dark ? '#4a4a47' : '#b0aca2',
+    bg:    dark ? '#1c1c1a' : '#f5f3ec',
+    car:   dark ? '#5DCAA5' : '#1D9E75',
+    truck: dark ? '#FAC775' : '#BA7517',
+    bus:   dark ? '#85B7EB' : '#185FA5',
+    ambu:  '#E24B4A',
+    green: '#639922',
+    red:   '#A32D2D',
+    text:  dark ? '#c2c0b6' : '#3d3d3a',
+  };
+
+  // Background
+  ctx.fillStyle = c.bg;
+  ctx.fillRect(0,0,W,H);
+
+  // Road cross
+  ctx.fillStyle = c.road;
+  ctx.fillRect(cx-RW/2, 0,   RW, H);
+  ctx.fillRect(0, cy-RH/2,   W,  RH);
+
+  // Centre intersection box
+  ctx.fillStyle = c.lane;
+  ctx.fillRect(cx-RW/2, cy-RH/2, RW, RH);
+
+  // Lane dashes
+  ctx.save();
+  ctx.setLineDash([H*0.035, H*0.025]);
+  ctx.strokeStyle = c.mark; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(cx,0);       ctx.lineTo(cx,cy-RH/2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx,cy+RH/2); ctx.lineTo(cx,H);       ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0,cy);       ctx.lineTo(cx-RW/2,cy); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx+RW/2,cy); ctx.lineTo(W,cy);       ctx.stroke();
+  ctx.restore();
+
+  if (!state) return;
+
+  const phase = state.phase;
+  const nsGreen = phase==='ns_green', ewGreen=phase==='ew_green';
+
+  // Signal lights (4 corners of intersection box)
+  const lights = [
+    { x:cx-RW/2-10, y:cy-RH/4,   ns:true  },
+    { x:cx+RW/2+10, y:cy+RH/4,   ns:true  },
+    { x:cx-RW/4,    y:cy-RH/2-10, ns:false },
+    { x:cx+RW/4,    y:cy+RH/2+10, ns:false },
+  ];
+  for (const l of lights) {
+    const green = l.ns ? nsGreen : ewGreen;
+    // Glow ring
+    ctx.beginPath(); ctx.arc(l.x,l.y,8,0,Math.PI*2);
+    ctx.fillStyle = green ? 'rgba(99,153,17,0.18)' : 'rgba(163,45,45,0.18)';
+    ctx.fill();
+    // Dot
+    ctx.beginPath(); ctx.arc(l.x,l.y,5,0,Math.PI*2);
+    ctx.fillStyle = green ? c.green : c.red;
+    ctx.fill();
+  }
+
+  // Vehicle drawing helper
+  const VW = RW * 0.3, VH = RH * 0.2;
+  function drawVeh(x, y, type, isEmerg) {
+    const col = type==='ambulance'?c.ambu:type==='truck'?c.truck:type==='bus'?c.bus:c.car;
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.roundRect(x-VW/2, y-VH/2, VW, VH, 3);
+    ctx.fill();
+    if (isEmerg) {
+      ctx.save();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3,3]);
+      ctx.beginPath(); ctx.roundRect(x-VW/2, y-VH/2, VW, VH, 3); ctx.stroke();
+      ctx.restore();
+      // Cross symbol
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(x-3,y); ctx.lineTo(x+3,y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x,y-3); ctx.lineTo(x,y+3); ctx.stroke();
+    }
+  }
+
+  const SHOW = 5;
+  const SP = RH * 0.27; // spacing between vehicles
+
+  // North queue (above intersection, right lane)
+  state.lanes.north.slice(0,SHOW).forEach((id,i) => {
+    const v = state.vehicles[id];
+    drawVeh(cx+RW*0.22, cy-RH/2-SP*(i+1), v.type, id===state.emergId);
+  });
+  // South queue (below intersection, left lane)
+  state.lanes.south.slice(0,SHOW).forEach((id,i) => {
+    const v = state.vehicles[id];
+    drawVeh(cx-RW*0.22, cy+RH/2+SP*(i+1), v.type, id===state.emergId);
+  });
+  // East queue (right of intersection, bottom lane)
+  state.lanes.east.slice(0,SHOW).forEach((id,i) => {
+    const v = state.vehicles[id];
+    drawVeh(cx+RW/2+SP*(i+1), cy+RH*0.22, v.type, id===state.emergId);
+  });
+  // West queue (left of intersection, top lane)
+  state.lanes.west.slice(0,SHOW).forEach((id,i) => {
+    const v = state.vehicles[id];
+    drawVeh(cx-RW/2-SP*(i+1), cy-RH*0.22, v.type, id===state.emergId);
+  });
+
+  // Overflow labels
+  ctx.fillStyle = c.text;
+  ctx.font = `500 11px system-ui,sans-serif`;
+  ctx.textAlign = 'center';
+  const overflow = (d, ox, oy) => {
+    const extra = state.lanes[d].length - SHOW;
+    if (extra > 0) { ctx.fillText(`+${extra} more`, ox, oy); }
+  };
+  overflow('north', cx+RW*0.22, cy-RH/2-SP*(SHOW+0.8));
+  overflow('south', cx-RW*0.22, cy+RH/2+SP*(SHOW+1.2));
+  overflow('east',  cx+RW/2+SP*(SHOW+0.9), cy+RH*0.22+14);
+  overflow('west',  cx-RW/2-SP*(SHOW+0.9), cy-RH*0.22-5);
+
+  // Direction + queue count labels
+  ctx.font = `400 11px system-ui,sans-serif`;
+  ctx.fillStyle = c.text;
+  const q = d => state.lanes[d].length;
+  ctx.fillText(`N (${q('north')})`, cx, 14);
+  ctx.fillText(`S (${q('south')})`, cx, H-5);
+  ctx.textAlign='right'; ctx.fillText(`W (${q('west')})`, cx-RW/2-8, cy+4);
+  ctx.textAlign='left';  ctx.fillText(`E (${q('east')})`, cx+RW/2+8, cy+4);
+  ctx.textAlign='center';
+
+  // Phase label in intersection centre
+  ctx.font = `500 11px system-ui,sans-serif`;
+  ctx.fillStyle = nsGreen ? c.green : ewGreen ? c.green : c.text;
+  ctx.globalAlpha = 0.7;
+  ctx.fillText(phase==='ns_green'?'N↕S':phase==='ew_green'?'E↔W':'ALL RED', cx, cy+4);
+  ctx.globalAlpha = 1;
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+resetSim();
+window.addEventListener('resize', () => { if (state) drawScene(); });
+</script>
+</body>
+</html>

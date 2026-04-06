@@ -1,0 +1,119 @@
+name: traffic-control-env
+version: "1.0.0"
+description: >
+  Multi-agent autonomous traffic signal control at a 4-way intersection.
+  Agents learn to coordinate signal phases to minimize vehicle wait times,
+  prevent lane starvation, and prioritize emergency vehicles (ambulances).
+  Models a real urban traffic management challenge used by smart city systems.
+
+author: xyzlambo
+tags:
+  - openenv
+  - traffic
+  - infrastructure
+  - emergency-response
+  - real-world
+  - multi-objective
+
+tasks:
+  - id: 1
+    name: Basic Throughput
+    difficulty: easy
+    max_steps: 60
+    description: >
+      Clear at least 30 vehicles through the intersection with
+      average wait time ≤ 5 steps. Learn basic NS/EW phase switching.
+
+  - id: 2
+    name: Emergency Priority
+    difficulty: medium
+    max_steps: 80
+    description: >
+      All of Task 1 plus: an ambulance appears mid-episode and must
+      be cleared within 40 steps of arrival. Balance throughput and
+      emergency priority.
+
+  - id: 3
+    name: Rush Hour Orchestration
+    difficulty: hard
+    max_steps: 120
+    description: >
+      2.5× arrival surge. Clear 70+ vehicles, handle multiple emergencies,
+      prevent lane starvation (queue overflow). Tests advanced scheduling.
+
+observation_space:
+  type: object
+  description: >
+    Structured observation including lane queue lengths, vehicle types,
+    current signal phase, emergency status, wait time statistics, and
+    remaining step budget.
+  fields:
+    - name: step
+      type: integer
+    - name: current_phase
+      type: string
+      enum: [ns_green, ew_green, all_red]
+    - name: phase_duration
+      type: integer
+    - name: lanes
+      type: object
+      description: Per-direction queue state
+    - name: total_waiting
+      type: integer
+    - name: emergency_waiting
+      type: boolean
+    - name: emergency_direction
+      type: string
+      nullable: true
+    - name: emergency_wait_steps
+      type: integer
+    - name: avg_wait_time
+      type: number
+    - name: throughput
+      type: integer
+    - name: step_budget
+      type: integer
+    - name: task_id
+      type: integer
+
+action_space:
+  type: object
+  description: >
+    Signal phase selection with hold duration. Agent chooses which
+    phase to activate and for how many steps (1-10).
+  fields:
+    - name: phase
+      type: string
+      enum: [ns_green, ew_green, all_red]
+    - name: hold_steps
+      type: integer
+      minimum: 1
+      maximum: 10
+
+reward:
+  type: object
+  description: >
+    Multi-component reward: throughput_bonus (vehicles cleared) minus
+    wait_penalty (exponential for long waits) plus emergency_bonus
+    (cleared in time) minus starvation_penalty (queue overflow).
+  range: [unbounded_negative, unbounded_positive]
+  grading_range: [0.0, 1.0]
+
+api:
+  base_url: https://your-hf-space.hf.space
+  endpoints:
+    - POST /reset
+    - POST /step
+    - GET  /state
+    - GET  /tasks
+    - POST /grade
+    - GET  /health
+
+inference:
+  script: inference.py
+  requires:
+    - OPENAI_API_KEY
+    - API_BASE_URL
+    - MODEL_NAME
+    - HF_TOKEN
+    - HF_SPACE_URL
