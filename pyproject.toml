@@ -20,3 +20,8 @@ server = "traffic_control_env.server.app:main"
 include-package-data = true
 packages = ["traffic_control_env", "traffic_control_env.server"]
 package-dir = { "traffic_control_env" = ".", "traffic_control_env.server" = "server" }
+
+# Tells the HF deployment checker that uv is not managing this project.
+# Dependencies are installed by pip inside the Dockerfile — no uv.lock needed.
+[tool.uv]
+managed = false
