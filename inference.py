@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """
 TrafficControlEnv — Inference Script v2
-
 Changes from v1:
   ① Smart reward awareness — agent prompt explains all reward components
   ② Emergency preemption   — agent sets emergency_preempt=true when urgency > 0.7
   ③ Multi-agent task 4     — sends intersection_phases for all 4 intersections,
                              coordinates green-wave patterns
-
 Required env vars:
   OPENAI_API_KEY   — API key
   API_BASE_URL     — LLM base URL (default: https://api.openai.com/v1)
@@ -28,7 +26,7 @@ from openai import OpenAI
 API_KEY      = os.environ.get("OPENAI_API_KEY", "")
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o-mini")
-HF_TOKEN     = os.environ.get("HF_TOKEN", "")
+HF_TOKEN     = os.environ.get("HF_TOKEN")
 HF_SPACE_URL = os.environ.get("HF_SPACE_URL", "http://localhost:7860")
 
 TEMPERATURE = 0.2
@@ -39,7 +37,6 @@ VALID_PHASES = {"ns_green", "ew_green", "all_red"}
 
 # ① Smart-reward-aware prompt for tasks 1-3
 SYSTEM_SINGLE = """You control one 4-way traffic signal intersection.
-
 ## Reward components (all matter):
   + throughput_bonus   — weighted: bus=2x, truck=1.5x, ambulance=5x, car=1x
   - wait_penalty       — EXPONENTIAL after 6 steps; long waits punish hard
@@ -48,12 +45,10 @@ SYSTEM_SINGLE = """You control one 4-way traffic signal intersection.
   - urgency_penalty    — up to -0.5/step while ambulance waits (sigmoid)
   - starvation_penalty — -0.5 per vehicle beyond queue cap of 15
   - phase_switch_cost  — -0.25 if you switch before holding 2 steps
-
 ## Phases:
   ns_green  North+South flow, East+West stop
   ew_green  East+West flow, North+South stop
   all_red   All stop (only for emergency transitions)
-
 ## Decision rules (in priority order):
 1. If emergency_urgency > 0.7 OR preemption_active=true:
    set phase for ambulance direction AND emergency_preempt=true immediately.
@@ -62,44 +57,36 @@ SYSTEM_SINGLE = """You control one 4-way traffic signal intersection.
 3. Pick the busiest axis; keep queues balanced.
 4. Hold 3-6 steps. Never switch before 2 steps (pays switch cost).
 5. Use all_red only when switching directions for an incoming ambulance.
-
 Respond ONLY with valid JSON, no markdown:
 {"phase":"ns_green","hold_steps":4,"emergency_preempt":false}
 """
 
 # ③ Multi-agent prompt for task 4
 SYSTEM_MULTI = """You coordinate 4 traffic signal intersections in a 2x2 grid.
-
 ## Grid layout:
   [I0 NW] ── [I1 NE]
      |              |
   [I2 SW] ── [I3 SE]
-
 Vehicles cleared from one intersection can flow into adjacent ones (40% probability).
-
 ## Green Wave Bonus (+0.8/step when active):
 Coordinate adjacent pairs to the same phase:
   Horizontal wave: I0=I1=ns_green AND I2=I3=ns_green  (or both ew_green)
   Vertical wave:   I0=I2=ns_green AND I1=I3=ns_green  (or both ew_green)
 Pick whichever axis has more total vehicles.
-
 ## ① Reward components (same as single-agent, multiplied across 4 intersections):
   + weighted throughput, + balance bonus, + green_wave_bonus
   - exponential wait penalty, - urgency penalty, - starvation penalty
-
 ## ② Emergency preemption:
 If any intersection has emergency_urgency > 0.7:
   - Set that intersection's phase for the ambulance direction
   - Set emergency_preempt=true for that intersection
   - Set the same phase for downstream intersections on the ambulance's route
     (ambulance traveling south: set I0→I2 or I1→I3 to ns_green)
-
 Respond ONLY with valid JSON (exactly 4 entries each), no markdown:
 {"intersection_phases":["ns_green","ns_green","ns_green","ns_green"],
  "intersection_hold_steps":[4,4,4,4],
  "intersection_preempt":[false,false,false,false],
  "phase":"ns_green","hold_steps":4,"emergency_preempt":false}
-
 (The plain phase/hold_steps/emergency_preempt are required for backward compat
 and should match I0 values.)
 """
@@ -107,14 +94,14 @@ and should match I0 values.)
 # ─── Logging ───────────────────────────────────────────────────────────────────
 
 def log_start(task: str, model: str):
-    print(f"[START] task={task} model={model}", flush=True)
+    print(f"START task={task} model={model}", flush=True)
 
 def log_step(step: int, action: Any, reward: float, done: bool, info: str = ""):
-    print(f"[STEP] step={step} action={json.dumps(action)} reward={reward:.4f} done={done}{' '+info if info else ''}", flush=True)
+    print(f"STEP step={step} action={json.dumps(action)} reward={reward:.4f} done={done}{' '+info if info else ''}", flush=True)
 
 def log_end(success: bool, steps: int, score: float, rewards: list[float]):
     avg = sum(rewards) / len(rewards) if rewards else 0.0
-    print(f"[END] success={success} steps={steps} score={score:.4f} avg_reward={avg:.4f}", flush=True)
+    print(f"END success={success} steps={steps} score={score:.4f} avg_reward={avg:.4f}", flush=True)
 
 # ─── HTTP client ───────────────────────────────────────────────────────────────
 
@@ -197,36 +184,115 @@ def prompt_multi(obs: dict, history: list[str]) -> str:
 # ─── Action parsers ────────────────────────────────────────────────────────────
 
 def _fallback_single(obs: dict) -> dict:
-    """② Fallback with emergency preemption logic."""
+    """② Fallback with emergency preemption logic and adaptive hold strategy."""
     urg = obs.get("emergency_urgency", 0.0)
-    ed = obs.get("emergency_direction")
+    ed  = obs.get("emergency_direction")
+
+    # (A+D) Emergency preemption — highest priority
     if urg > 0.7 and ed:
         ph = "ns_green" if ed in ("north", "south") else "ew_green"
         return {"phase": ph, "hold_steps": 2, "emergency_preempt": True}
-    lanes = obs.get("lanes", {})
-    ns = lanes.get("north", {}).get("queue_length", 0) + lanes.get("south", {}).get("queue_length", 0)
-    ew = lanes.get("east",  {}).get("queue_length", 0) + lanes.get("west",  {}).get("queue_length", 0)
-    return {"phase": "ns_green" if ns >= ew else "ew_green", "hold_steps": 3, "emergency_preempt": False}
+
+    # (B) Smarter queue balancing — explicit NS vs EW totals
+    lanes    = obs.get("lanes", {})
+    total_ns = (lanes.get("north", {}).get("queue_length", 0) +
+                lanes.get("south", {}).get("queue_length", 0))
+    total_ew = (lanes.get("east",  {}).get("queue_length", 0) +
+                lanes.get("west",  {}).get("queue_length", 0))
+
+    # Prefer the direction with the higher total queue;
+    # only switch preference if the other axis is meaningfully larger
+    if total_ns >= total_ew:
+        phase    = "ns_green"
+        dominant = total_ns
+        minor    = total_ew
+    else:
+        phase    = "ew_green"
+        dominant = total_ew
+        minor    = total_ns
+
+    # (A) Adaptive hold_steps based on queue imbalance
+    diff = dominant - minor
+    if diff >= 6:
+        # One axis heavily loaded — serve it longer
+        hold_steps = 5
+    elif diff >= 3:
+        hold_steps = 4
+    else:
+        # Queues are roughly balanced — rotate quickly to prevent starvation
+        hold_steps = 3
+
+    # Clamp to valid range [1, 10]
+    hold_steps = max(1, min(10, hold_steps))
+
+    return {"phase": phase, "hold_steps": hold_steps, "emergency_preempt": False}
+
 
 def _fallback_multi(obs: dict) -> dict:
-    """③ Fallback: green wave + emergency preemption per intersection."""
+    """③ Fallback: true green wave across all intersections + emergency propagation."""
     snaps = obs.get("intersection_snapshots") or [{}] * 4
-    phases, hold, preempt = [], [], []
+
+    # (D) Scan all intersections for any active emergency first
+    emerg_phase = None
+    emerg_idx   = None
     for s in snaps:
         urg = s.get("emergency_urgency", 0.0)
-        ed = s.get("emergency_direction")
+        ed  = s.get("emergency_direction")
         if urg > 0.7 and ed:
-            ph = "ns_green" if ed in ("north", "south") else "ew_green"
-            phases.append(ph); hold.append(2); preempt.append(True)
-        else:
-            # Alternate to form a horizontal green wave
-            phases.append("ns_green" if s.get("id", 0) < 2 else "ew_green")
-            hold.append(4); preempt.append(False)
-    p0 = phases[0] if phases else "ns_green"
+            emerg_phase = "ns_green" if ed in ("north", "south") else "ew_green"
+            emerg_idx   = s.get("id", 0)
+            break  # first/highest-urgency emergency wins
+
+    if emerg_phase is not None:
+        # Propagate emergency phase to ALL intersections to clear the entire route
+        phases  = [emerg_phase] * 4
+        hold    = [2] * 4
+        preempt = [False] * 4
+        if emerg_idx is not None and 0 <= emerg_idx < 4:
+            preempt[emerg_idx] = True
+        return {
+            "phase":                    phases[0],
+            "hold_steps":               hold[0],
+            "emergency_preempt":        preempt[0],
+            "intersection_phases":      phases,
+            "intersection_hold_steps":  hold,
+            "intersection_preempt":     preempt,
+        }
+
+    # (C) Compute global NS and EW load across all intersections
+    total_ns = 0
+    total_ew = 0
+    for s in snaps:
+        total_ns += s.get("north_queue", 0) + s.get("south_queue", 0)
+        total_ew += s.get("east_queue",  0) + s.get("west_queue",  0)
+
+    # Choose dominant direction globally — set ALL intersections to the same
+    # phase to maximise the green-wave bonus (+0.8/step)
+    dominant = "ns_green" if total_ns >= total_ew else "ew_green"
+    phases   = [dominant, dominant, dominant, dominant]
+
+    # (A) Adaptive hold_steps based on global queue imbalance
+    diff = abs(total_ns - total_ew)
+    if diff >= 10:
+        hold_val = 5
+    elif diff >= 5:
+        hold_val = 4
+    else:
+        hold_val = 3
+    hold_val = max(1, min(10, hold_val))
+
+    hold    = [hold_val] * 4
+    preempt = [False] * 4
+
     return {
-        "phase": p0, "hold_steps": hold[0] if hold else 3, "emergency_preempt": preempt[0] if preempt else False,
-        "intersection_phases": phases, "intersection_hold_steps": hold, "intersection_preempt": preempt,
+        "phase":                    phases[0],
+        "hold_steps":               hold[0],
+        "emergency_preempt":        preempt[0],
+        "intersection_phases":      phases,
+        "intersection_hold_steps":  hold,
+        "intersection_preempt":     preempt,
     }
+
 
 def parse_action(raw: str, obs: dict, task_id: int) -> dict:
     try:
