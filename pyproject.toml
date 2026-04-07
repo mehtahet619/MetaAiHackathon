@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openenv-traffic_control_env"
+version = "1.0.0"
+description = "Autonomous traffic signal control environment for OpenEnv"
+requires-python = ">=3.10"
+dependencies = [
+    "openenv-core[core]>=0.2.2",
+    "uvicorn>=0.24.0",
+    "fastapi>=0.115.0",
+]
+
+[project.scripts]
+server = "traffic_control_env.server.app:main"
+
+[tool.setuptools]
+include-package-data = true
+packages = ["traffic_control_env", "traffic_control_env.server"]
+package-dir = { "traffic_control_env" = ".", "traffic_control_env.server" = "server" }
