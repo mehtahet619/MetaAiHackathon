@@ -1,3 +1,12 @@
+---
+title: TrafficControlEnv
+emoji: 🚦
+colorFrom: green
+colorTo: red
+sdk: docker
+pinned: false
+---
+
 # 🚦 TrafficControlEnv
 
 **OpenEnv — Autonomous Intersection Traffic Signal Control**
