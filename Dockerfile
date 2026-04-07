@@ -2,11 +2,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY server/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir uvicorn fastapi openenv-core
 
 COPY models.py .
 COPY server/ ./server/
+COPY traffic-control-sim.html ./static/index.html
 
 EXPOSE 7860
 
