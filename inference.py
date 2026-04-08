@@ -405,12 +405,14 @@ def run_task(task_id: int, llm: OpenAI, env: EnvClient) -> float:
             if done:
                 break
 
-        grade   = env.grade()
-        score   = grade.get("score", 0.0)
-        success = score >= 0.6
+        grade     = env.grade()
+        raw_score = float(grade.get("score", 0.5))
+        score     = max(0.001, min(0.999, raw_score))  # strict (0, 1) — validator rejects 0.0 and 1.0
+        success   = score >= 0.6
 
     except Exception as e:
         print(f"[DEBUG] task {task_id} error: {e}", flush=True)
+        score = 0.001  # clamp default failure score too
     finally:
         log_end(task_name, success, steps_taken, score, rewards)  # ← [END] block
 
