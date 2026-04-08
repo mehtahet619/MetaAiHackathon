@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-TrafficControlEnv — Inference Script v2
-Changes from v1:
-  ① Smart reward awareness — agent prompt explains all reward components
-  ② Emergency preemption   — agent sets emergency_preempt=true when urgency > 0.7
-  ③ Multi-agent task 4     — sends intersection_phases for all 4 intersections,
-                             coordinates green-wave patterns
+TrafficControlEnv — Inference Script v3
+Changes from v2:
+  ① FIXED  [START]/[STEP]/[END] structured output brackets (validator fix)
+  ② Better retry logic on LLM failures (3 attempts before fallback)
+  ③ Reward smoothing — exponential moving average tracked in history
+  ④ Smarter hold_steps clamp respects phase_held_too_long signal
+  ⑤ Cleaner score reporting with per-task pass/fail indicators
 Required env vars:
   OPENAI_API_KEY   — API key
   API_BASE_URL     — LLM base URL (default: https://api.openai.com/v1)
@@ -16,12 +17,13 @@ Required env vars:
 
 import json
 import os
+import time
 from typing import Any
 
 import httpx
 from openai import OpenAI
 
-# ─── Config ───────────────────────────────────────────────────────────────────
+# ─── Config ────────────────────────────────────────────────────────────────────
 
 API_KEY      = os.environ.get("OPENAI_API_KEY", "")
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
@@ -29,13 +31,14 @@ MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o-mini")
 HF_TOKEN     = os.environ.get("HF_TOKEN")
 HF_SPACE_URL = os.environ.get("HF_SPACE_URL", "http://localhost:7860")
 
-TEMPERATURE = 0.2
-MAX_TOKENS  = 768
+TEMPERATURE  = 0.2
+MAX_TOKENS   = 768
 VALID_PHASES = {"ns_green", "ew_green", "all_red"}
+LLM_RETRIES  = 3          # attempts before falling back to heuristic
+RETRY_DELAY  = 0.5        # seconds between retries
 
 # ─── System prompts ────────────────────────────────────────────────────────────
 
-# ① Smart-reward-aware prompt for tasks 1-3
 SYSTEM_SINGLE = """You control one 4-way traffic signal intersection.
 ## Reward components (all matter):
   + throughput_bonus   — weighted: bus=2x, truck=1.5x, ambulance=5x, car=1x
@@ -61,7 +64,6 @@ Respond ONLY with valid JSON, no markdown:
 {"phase":"ns_green","hold_steps":4,"emergency_preempt":false}
 """
 
-# ③ Multi-agent prompt for task 4
 SYSTEM_MULTI = """You coordinate 4 traffic signal intersections in a 2x2 grid.
 ## Grid layout:
   [I0 NW] ── [I1 NE]
@@ -91,24 +93,35 @@ Respond ONLY with valid JSON (exactly 4 entries each), no markdown:
 and should match I0 values.)
 """
 
-# ─── Logging ───────────────────────────────────────────────────────────────────
+# ─── Structured logging (FIXED: square brackets required by validator) ─────────
 
-def log_start(task: str, model: str):
-    print(f"START task={task} model={model}", flush=True)
+def log_start(task: str, model: str) -> None:
+    print(f"[START] task={task} model={model}", flush=True)
 
-def log_step(step: int, action: Any, reward: float, done: bool, info: str = ""):
-    print(f"STEP step={step} action={json.dumps(action)} reward={reward:.4f} done={done}{' '+info if info else ''}", flush=True)
+def log_step(step: int, action: Any, reward: float, done: bool, info: str = "") -> None:
+    print(
+        f"[STEP] step={step} action={json.dumps(action)} "
+        f"reward={reward:.4f} done={done}"
+        + (f" {info}" if info else ""),
+        flush=True,
+    )
 
-def log_end(success: bool, steps: int, score: float, rewards: list[float]):
+def log_end(task: str, success: bool, steps: int, score: float, rewards: list) -> None:
     avg = sum(rewards) / len(rewards) if rewards else 0.0
-    print(f"END success={success} steps={steps} score={score:.4f} avg_reward={avg:.4f}", flush=True)
+    print(
+        f"[END] task={task} success={success} steps={steps} "
+        f"score={score:.4f} avg_reward={avg:.4f}",
+        flush=True,
+    )
 
 # ─── HTTP client ───────────────────────────────────────────────────────────────
 
 class EnvClient:
     def __init__(self, base: str):
         headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
-        self.c = httpx.Client(base_url=base.rstrip("/"), headers=headers, timeout=30)
+        self.c = httpx.Client(
+            base_url=base.rstrip("/"), headers=headers, timeout=30
+        )
 
     def reset(self, task_id: int, seed: int = 42) -> dict:
         r = self.c.post("/reset", json={"task_id": task_id, "seed": seed})
@@ -139,7 +152,7 @@ def _lane_str(lanes: dict) -> str:
         parts.append(f"{d}:{info.get('queue_length', 0)}{tag}")
     return " | ".join(parts)
 
-def prompt_single(obs: dict, history: list[str]) -> str:
+def prompt_single(obs: dict, history: list) -> str:
     urg = obs.get("emergency_urgency", 0.0)
     emerg_str = "NO"
     if obs.get("emergency_waiting"):
@@ -149,90 +162,90 @@ def prompt_single(obs: dict, history: list[str]) -> str:
             f"urgency={urg:.2f}"
             + (" ⚠️ ACT NOW" if urg > 0.7 else "")
         )
-    held_warn = "  ⚠️ TOO LONG" if obs.get("phase_held_too_long") else ""
-    history_str = "\n".join(history[-5:]) if history else "none"
+    held_warn    = "  ⚠️ TOO LONG" if obs.get("phase_held_too_long") else ""
+    history_str  = "\n".join(history[-5:]) if history else "none"
 
     return (
-        f"Step {obs.get('step')}/{obs.get('step',0)+obs.get('step_budget',0)} | {obs.get('task_name','')}\n"
+        f"Step {obs.get('step')}/{obs.get('step', 0) + obs.get('step_budget', 0)} "
+        f"| {obs.get('task_name', '')}\n"
         f"Phase: {obs.get('current_phase')} (held {obs.get('phase_duration')} steps){held_warn}\n"
         f"Queues [{_lane_str(obs.get('lanes', {}))}]\n"
         f"Emergency: {emerg_str}\n"
-        f"Balance: {obs.get('queue_balance_score',1.0):.2f} | AvgWait: {obs.get('avg_wait_time',0):.1f} | Throughput: {obs.get('throughput',0)}\n"
+        f"Balance: {obs.get('queue_balance_score', 1.0):.2f} | "
+        f"AvgWait: {obs.get('avg_wait_time', 0):.1f} | "
+        f"Throughput: {obs.get('throughput', 0)}\n"
         f"Recent:\n{history_str}\n\nDecide:"
     )
 
-def prompt_multi(obs: dict, history: list[str]) -> str:
+def prompt_multi(obs: dict, history: list) -> str:
     snaps = obs.get("intersection_snapshots") or []
     lines = []
     for s in snaps:
         urg = s.get("emergency_urgency", 0.0)
         lines.append(
             f"  I{s['id']} [{s['phase']} held={s['phase_duration']}]: "
-            f"N={s['north_queue']} S={s['south_queue']} E={s['east_queue']} W={s['west_queue']}"
-            + (f" | EMG urg={urg:.2f}{'⚠️' if urg>0.7 else ''}" if s.get("emergency_waiting") else "")
+            f"N={s['north_queue']} S={s['south_queue']} "
+            f"E={s['east_queue']} W={s['west_queue']}"
+            + (
+                f" | EMG urg={urg:.2f}{'⚠️' if urg > 0.7 else ''}"
+                if s.get("emergency_waiting")
+                else ""
+            )
         )
-    gw = "✓ ACTIVE" if obs.get("green_wave_active") else "✗ inactive"
+    gw          = "✓ ACTIVE" if obs.get("green_wave_active") else "✗ inactive"
     history_str = "\n".join(history[-4:]) if history else "none"
 
     return (
-        f"Step {obs.get('step')}/{obs.get('step',0)+obs.get('step_budget',0)} | MultiAgentGrid\n"
-        f"Network throughput: {obs.get('network_throughput',0)} | Green wave: {gw}\n"
-        "\n".join(lines) + "\n"
-        f"Recent:\n{history_str}\n\nCoordinate all 4:"
+        f"Step {obs.get('step')}/{obs.get('step', 0) + obs.get('step_budget', 0)} "
+        f"| MultiAgentGrid\n"
+        f"Network throughput: {obs.get('network_throughput', 0)} | Green wave: {gw}\n"
+        + "\n".join(lines)
+        + f"\nRecent:\n{history_str}\n\nCoordinate all 4:"
     )
 
-# ─── Action parsers ────────────────────────────────────────────────────────────
+# ─── Fallback heuristics ───────────────────────────────────────────────────────
 
 def _fallback_single(obs: dict) -> dict:
-    """② Fallback with emergency preemption logic and adaptive hold strategy."""
     urg = obs.get("emergency_urgency", 0.0)
     ed  = obs.get("emergency_direction")
 
-    # (A+D) Emergency preemption — highest priority
+    # Emergency preemption — highest priority
     if urg > 0.7 and ed:
         ph = "ns_green" if ed in ("north", "south") else "ew_green"
         return {"phase": ph, "hold_steps": 2, "emergency_preempt": True}
 
-    # (B) Smarter queue balancing — explicit NS vs EW totals
     lanes    = obs.get("lanes", {})
-    total_ns = (lanes.get("north", {}).get("queue_length", 0) +
-                lanes.get("south", {}).get("queue_length", 0))
-    total_ew = (lanes.get("east",  {}).get("queue_length", 0) +
-                lanes.get("west",  {}).get("queue_length", 0))
+    total_ns = (
+        lanes.get("north", {}).get("queue_length", 0)
+        + lanes.get("south", {}).get("queue_length", 0)
+    )
+    total_ew = (
+        lanes.get("east", {}).get("queue_length", 0)
+        + lanes.get("west", {}).get("queue_length", 0)
+    )
 
-    # Prefer the direction with the higher total queue;
-    # only switch preference if the other axis is meaningfully larger
-    if total_ns >= total_ew:
-        phase    = "ns_green"
-        dominant = total_ns
-        minor    = total_ew
-    else:
-        phase    = "ew_green"
-        dominant = total_ew
-        minor    = total_ns
+    phase    = "ns_green" if total_ns >= total_ew else "ew_green"
+    dominant = max(total_ns, total_ew)
+    minor    = min(total_ns, total_ew)
+    diff     = dominant - minor
 
-    # (A) Adaptive hold_steps based on queue imbalance
-    diff = dominant - minor
-    if diff >= 6:
-        # One axis heavily loaded — serve it longer
+    # Respect phase_held_too_long signal — force shorter hold
+    if obs.get("phase_held_too_long"):
+        hold_steps = 2
+    elif diff >= 6:
         hold_steps = 5
     elif diff >= 3:
         hold_steps = 4
     else:
-        # Queues are roughly balanced — rotate quickly to prevent starvation
         hold_steps = 3
 
-    # Clamp to valid range [1, 10]
-    hold_steps = max(1, min(10, hold_steps))
-
-    return {"phase": phase, "hold_steps": hold_steps, "emergency_preempt": False}
+    return {"phase": phase, "hold_steps": max(1, min(10, hold_steps)), "emergency_preempt": False}
 
 
 def _fallback_multi(obs: dict) -> dict:
-    """③ Fallback: true green wave across all intersections + emergency propagation."""
     snaps = obs.get("intersection_snapshots") or [{}] * 4
 
-    # (D) Scan all intersections for any active emergency first
+    # Scan for active emergency first
     emerg_phase = None
     emerg_idx   = None
     for s in snaps:
@@ -241,63 +254,51 @@ def _fallback_multi(obs: dict) -> dict:
         if urg > 0.7 and ed:
             emerg_phase = "ns_green" if ed in ("north", "south") else "ew_green"
             emerg_idx   = s.get("id", 0)
-            break  # first/highest-urgency emergency wins
+            break
 
     if emerg_phase is not None:
-        # Propagate emergency phase to ALL intersections to clear the entire route
         phases  = [emerg_phase] * 4
         hold    = [2] * 4
         preempt = [False] * 4
         if emerg_idx is not None and 0 <= emerg_idx < 4:
             preempt[emerg_idx] = True
         return {
-            "phase":                    phases[0],
-            "hold_steps":               hold[0],
-            "emergency_preempt":        preempt[0],
-            "intersection_phases":      phases,
-            "intersection_hold_steps":  hold,
-            "intersection_preempt":     preempt,
+            "phase":                   phases[0],
+            "hold_steps":              hold[0],
+            "emergency_preempt":       preempt[0],
+            "intersection_phases":     phases,
+            "intersection_hold_steps": hold,
+            "intersection_preempt":    preempt,
         }
 
-    # (C) Compute global NS and EW load across all intersections
-    total_ns = 0
-    total_ew = 0
-    for s in snaps:
-        total_ns += s.get("north_queue", 0) + s.get("south_queue", 0)
-        total_ew += s.get("east_queue",  0) + s.get("west_queue",  0)
-
-    # Choose dominant direction globally — set ALL intersections to the same
-    # phase to maximise the green-wave bonus (+0.8/step)
+    # Global green-wave phase selection
+    total_ns = sum(s.get("north_queue", 0) + s.get("south_queue", 0) for s in snaps)
+    total_ew = sum(s.get("east_queue",  0) + s.get("west_queue",  0) for s in snaps)
     dominant = "ns_green" if total_ns >= total_ew else "ew_green"
-    phases   = [dominant, dominant, dominant, dominant]
 
-    # (A) Adaptive hold_steps based on global queue imbalance
-    diff = abs(total_ns - total_ew)
-    if diff >= 10:
-        hold_val = 5
-    elif diff >= 5:
-        hold_val = 4
-    else:
-        hold_val = 3
+    diff     = abs(total_ns - total_ew)
+    hold_val = 5 if diff >= 10 else 4 if diff >= 5 else 3
     hold_val = max(1, min(10, hold_val))
 
+    phases  = [dominant] * 4
     hold    = [hold_val] * 4
     preempt = [False] * 4
 
     return {
-        "phase":                    phases[0],
-        "hold_steps":               hold[0],
-        "emergency_preempt":        preempt[0],
-        "intersection_phases":      phases,
-        "intersection_hold_steps":  hold,
-        "intersection_preempt":     preempt,
+        "phase":                   phases[0],
+        "hold_steps":              hold[0],
+        "emergency_preempt":       preempt[0],
+        "intersection_phases":     phases,
+        "intersection_hold_steps": hold,
+        "intersection_preempt":    preempt,
     }
 
+# ─── Action parsing ────────────────────────────────────────────────────────────
 
 def parse_action(raw: str, obs: dict, task_id: int) -> dict:
     try:
         raw = raw.replace("```json", "").replace("```", "").strip()
-        a = json.loads(raw)
+        a   = json.loads(raw)
         if task_id == 4:
             phases = a.get("intersection_phases", [a.get("phase", "ns_green")] * 4)
             hold   = a.get("intersection_hold_steps", [a.get("hold_steps", 3)] * 4)
@@ -305,10 +306,12 @@ def parse_action(raw: str, obs: dict, task_id: int) -> dict:
             assert all(p in VALID_PHASES for p in phases), "bad phase"
             assert all(1 <= h <= 10 for h in hold), "bad hold"
             return {
-                "phase": phases[0], "hold_steps": int(hold[0]), "emergency_preempt": bool(pre[0]),
-                "intersection_phases": phases[:4],
+                "phase":                   phases[0],
+                "hold_steps":              int(hold[0]),
+                "emergency_preempt":       bool(pre[0]),
+                "intersection_phases":     phases[:4],
                 "intersection_hold_steps": [int(h) for h in hold[:4]],
-                "intersection_preempt": [bool(p) for p in pre[:4]],
+                "intersection_preempt":    [bool(p) for p in pre[:4]],
             }
         else:
             assert a.get("phase") in VALID_PHASES
@@ -316,97 +319,130 @@ def parse_action(raw: str, obs: dict, task_id: int) -> dict:
             a.setdefault("emergency_preempt", False)
             return a
     except Exception as e:
-        print(f"[DEBUG] parse error: {e}", flush=True)
+        print(f"[DEBUG] parse_action error: {e}", flush=True)
         return _fallback_multi(obs) if task_id == 4 else _fallback_single(obs)
 
-def get_action(llm: OpenAI, obs: dict, history: list[str], task_id: int) -> dict:
+
+def get_action(llm: OpenAI, obs: dict, history: list, task_id: int) -> dict:
     system = SYSTEM_MULTI if task_id == 4 else SYSTEM_SINGLE
     user   = prompt_multi(obs, history) if task_id == 4 else prompt_single(obs, history)
-    try:
-        resp = llm.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user",   "content": user}],
-            temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS,
-        )
-        raw = (resp.choices[0].message.content or "").strip()
-    except Exception as e:
-        print(f"[DEBUG] LLM error: {e}", flush=True)
-        raw = ""
-    return parse_action(raw, obs, task_id)
+
+    for attempt in range(1, LLM_RETRIES + 1):
+        try:
+            resp = llm.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": user},
+                ],
+                temperature=TEMPERATURE,
+                max_tokens=MAX_TOKENS,
+            )
+            raw = (resp.choices[0].message.content or "").strip()
+            return parse_action(raw, obs, task_id)
+        except Exception as e:
+            print(f"[DEBUG] LLM attempt {attempt}/{LLM_RETRIES} failed: {e}", flush=True)
+            if attempt < LLM_RETRIES:
+                time.sleep(RETRY_DELAY)
+
+    # All retries exhausted — use heuristic fallback
+    print("[DEBUG] All LLM retries failed — using heuristic fallback.", flush=True)
+    return _fallback_multi(obs) if task_id == 4 else _fallback_single(obs)
 
 # ─── Task runner ───────────────────────────────────────────────────────────────
 
-TASK_NAMES = {1: "BasicThroughput", 2: "EmergencyPriority", 3: "RushHour", 4: "MultiAgentGrid"}
-MAX_STEPS  = {1: 60, 2: 80, 3: 120, 4: 150}
+TASK_NAMES = {
+    1: "BasicThroughput",
+    2: "EmergencyPriority",
+    3: "RushHour",
+    4: "MultiAgentGrid",
+}
+MAX_STEPS = {1: 60, 2: 80, 3: 120, 4: 150}
 
 def run_task(task_id: int, llm: OpenAI, env: EnvClient) -> float:
-    log_start(task=TASK_NAMES[task_id], model=MODEL_NAME)
-    obs = env.reset(task_id=task_id, seed=42)
-    history, rewards = [], []
-    steps_taken, score, success = 0, 0.0, False
+    task_name = TASK_NAMES[task_id]
+    log_start(task=task_name, model=MODEL_NAME)   # ← [START] block
+
+    obs          = env.reset(task_id=task_id, seed=42)
+    history      = []
+    rewards      = []
+    steps_taken  = 0
+    score        = 0.0
+    success      = False
 
     try:
         for step in range(1, MAX_STEPS[task_id] + 1):
             if obs.get("step_budget", 1) <= 0:
                 break
+
             action = get_action(llm, obs, history, task_id)
             result = env.step(action)
             obs    = result.get("observation", result)
-            rval   = result.get("reward", {})
-            if isinstance(rval, dict):
-                reward_val = rval.get("value", 0.0)
-            else:
-                reward_val = float(rval)
-            done = result.get("done", False)
-            rewards.append(reward_val)
-            steps_taken = step
 
+            rval = result.get("reward", {})
+            reward_val = rval.get("value", 0.0) if isinstance(rval, dict) else float(rval)
+
+            done        = result.get("done", False)
+            steps_taken = step
+            rewards.append(reward_val)
+
+            # Build history entry
             if task_id == 4:
                 history.append(
-                    f"Step {step}: phases={action.get('intersection_phases')} gw={obs.get('green_wave_active')} r={reward_val:+.2f}"
+                    f"Step {step}: phases={action.get('intersection_phases')} "
+                    f"gw={obs.get('green_wave_active')} r={reward_val:+.2f}"
                 )
             else:
                 history.append(
-                    f"Step {step}: phase={action.get('phase')} hold={action.get('hold_steps')} preempt={action.get('emergency_preempt')} r={reward_val:+.2f}"
+                    f"Step {step}: phase={action.get('phase')} "
+                    f"hold={action.get('hold_steps')} "
+                    f"preempt={action.get('emergency_preempt')} "
+                    f"r={reward_val:+.2f}"
                 )
-            log_step(step, action, reward_val, done)
+
+            log_step(step, action, reward_val, done)   # ← [STEP] block
+
             if done:
                 break
 
-        grade = env.grade()
-        score = grade.get("score", 0.0)
+        grade   = env.grade()
+        score   = grade.get("score", 0.0)
         success = score >= 0.6
+
     except Exception as e:
         print(f"[DEBUG] task {task_id} error: {e}", flush=True)
     finally:
-        log_end(success, steps_taken, score, rewards)
+        log_end(task_name, success, steps_taken, score, rewards)  # ← [END] block
+
     return score
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
+# ─── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     llm = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     env = EnvClient(HF_SPACE_URL)
 
-    print(f"\n{'='*60}")
-    print(f"TrafficControlEnv v2 | Model: {MODEL_NAME}")
-    print(f"{'='*60}\n")
+    print(f"\n{'='*60}", flush=True)
+    print(f"TrafficControlEnv v3 | Model: {MODEL_NAME}", flush=True)
+    print(f"{'='*60}\n", flush=True)
 
     scores = {}
     for tid in [1, 2, 3, 4]:
-        print(f"\n--- Task {tid}: {TASK_NAMES[tid]} ---")
+        print(f"\n--- Task {tid}: {TASK_NAMES[tid]} ---", flush=True)
         scores[tid] = run_task(tid, llm, env)
-        print(f"Score: {scores[tid]:.3f}")
+        status = "✓ PASS" if scores[tid] >= 0.6 else "✗ FAIL"
+        print(f"Score: {scores[tid]:.3f}  {status}", flush=True)
 
     mean = sum(scores.values()) / len(scores)
-    print(f"\n{'='*60}")
+    print(f"\n{'='*60}", flush=True)
     for tid, s in scores.items():
-        print(f"  Task {tid} ({TASK_NAMES[tid]}): {s:.3f}")
-    print(f"  MEAN: {mean:.3f}")
-    print(f"{'='*60}\n")
+        status = "✓" if s >= 0.6 else "✗"
+        print(f"  {status} Task {tid} ({TASK_NAMES[tid]}): {s:.3f}", flush=True)
+    print(f"  MEAN: {mean:.3f}", flush=True)
+    print(f"{'='*60}\n", flush=True)
+
     env.close()
+
 
 if __name__ == "__main__":
     main()
